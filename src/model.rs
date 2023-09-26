@@ -1,36 +1,60 @@
-use std::collections::{HashMap, HashSet};
+pub mod entity {
+    use std::collections::HashSet;
 
-pub type Id = u32;
-pub type Tag = String;
+    pub type Id = u32;
+    pub type Tag = String;
 
-pub struct Member {
-    pub id: Id,
-    pub tags: HashSet<Tag>,
+    #[derive(Debug, Clone)]
+    pub struct Member {
+        pub id: Id,
+        pub tags: HashSet<Tag>,
+    }
 }
 
-pub struct Group {
-    pub members: Vec<Member>,
+
+pub mod group {
+    use super::entity::{Id, Member, Tag};
+    pub struct Group {
+        pub members: Vec<Member>,
+    }
+
+    pub struct Table {
+        pub groups: Vec<Group>,
+    }
 }
 
-pub struct Table {
-    pub groups: Vec<Group>,
-}
+pub mod condition {
+    use std::collections::{HashMap, BTreeSet};
+    use super::entity::{Id, Tag};
 
-pub struct Penalty (pub HashMap<HashSet<Id>, i64>);
+    pub type Score = f64;
 
-pub struct Constraint (pub HashMap<Tag, std::ops::Range<usize>>);
+    pub struct RelationPenalty {
+        pub scores: HashMap<BTreeSet<Id>, Score>,
+        default: f64,
+    }
 
-pub struct Condition {
-    pub penalty: Penalty,
-    pub constraint: Constraint,
-}
+    impl RelationPenalty {
+        pub fn new(default: Score) -> RelationPenalty {
+            RelationPenalty {
+                scores: HashMap::new(),
+                default,
+            }
+        }
+        pub fn get_pair(&self, ids: [Id; 2]) -> Score {
+            self.scores.get(&BTreeSet::from(ids)).copied().unwrap_or(self.default)
+        }
+    }
 
-pub struct Position {
-    pub group_index: usize,
-    pub member_index: usize,
-}
 
-pub struct Swap {
-    from: Position,
-    to: Position,
+    pub enum Range {
+        Ratio {min: f64, max: f64},
+        Count {min: usize, max: usize},
+    }
+    pub struct Constraint (pub HashMap<Tag, Range>);
+
+    pub struct Condition {
+        pub penalty: RelationPenalty,
+        pub constraint: Constraint,
+    }
 }
