@@ -43,7 +43,8 @@ struct State {
 
 
 pub mod action {
-    use crate::model::entity::Member;
+    use std::ops::Add;
+    use crate::model::{entity::Member, condition::Score};
 
     pub type Index = usize;
     pub struct Position {
@@ -65,23 +66,48 @@ pub mod action {
         Remove(Position),
     }
 
+    #[derive(Debug, Clone)]
+    pub enum ActionError {
+        InvalidPosition,
+        InvalidGroupAction,
+    }
+
     pub enum ActionResult {
-        ScoreDiff(f64),
-        UnsatisfiedScoreDiff(f64),   // score, unsatisfied constraint
-        Failed,
+        ScoreDiff(Score),
+        UnsatisfiedScoreDiff(Score),   // score, unsatisfied constraint
+        Failed(Vec<ActionError>),
+    }
+
+    impl Add for ActionResult {
+        type Output = Self;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            match (&self, &rhs) {
+                (ActionResult::ScoreDiff(s1), ActionResult::ScoreDiff(s2))
+                    => ActionResult::ScoreDiff(s1 + s2),
+                (ActionResult::ScoreDiff(s1), ActionResult::UnsatisfiedScoreDiff(s2))
+                    => ActionResult::UnsatisfiedScoreDiff(s1 + s2),
+                (ActionResult::UnsatisfiedScoreDiff(s1), ActionResult::UnsatisfiedScoreDiff(s2))
+                    => ActionResult::UnsatisfiedScoreDiff(s1 + s2),
+                (ActionResult::Failed(err1), ActionResult::Failed(err2))
+                    => ActionResult::Failed(err1.into_iter().chain(err2.into_iter()).cloned().collect()),
+                _ => rhs + self
+            }
+        }
     }
 }
 
 
 pub mod cache {
     use std::collections::{HashMap, HashSet};
+    use std::ops::{Add, Sub};
 
     use itertools::Itertools;
 
     use crate::model::entity::{Id, Tag, Member};
     use crate::model::group::{Group, Table};
     use crate::model::condition::{RelationPenalty, Constraint, Condition, Score};
-    use super::action::{Action, ActionResult};
+    use super::action::{Index, Action, ActionResult, ActionError};
 
     struct CachedMember {
         pub member: Member,
@@ -98,19 +124,59 @@ pub mod cache {
         }
         pub fn simulate(&self, added_ids: Vec<Id>, removed_ids: Vec<Id>, penalty: &RelationPenalty) -> ActionResult {
             let my_id = self.member.id;
-            let sub = removed_ids.iter().map(|id| self.penalty.get(id))
+            let sub = removed_ids.iter()
+                .filter(|id| **id != my_id)
+                .map(|id| self.penalty.get(id))
                 .try_fold(0., |acc, score| score.map(|score| acc + score));
             if let Some(sub) = sub {
-                let add = added_ids.iter().map(|id| penalty.get_pair([my_id, *id])).sum::<Score>();
+                let add = added_ids.iter()
+                    .filter(|id| **id != my_id)
+                    .map(|id| penalty.get_pair([my_id, *id])).sum::<Score>();
                 return ActionResult::ScoreDiff(add - sub)
             }
-            ActionResult::Failed
+            ActionResult::Failed(vec![ActionError::InvalidPosition])
+        }
+    }
+
+    struct TagCounter (HashMap<Tag, usize>);
+
+    impl From<Vec<Tag>> for TagCounter {
+        fn from(tags: Vec<Tag>) -> Self {
+            let mut counter = HashMap::new();
+            for tag in tags {
+                *counter.entry(tag).or_insert(0) += 1;
+            }
+            TagCounter(counter)
+        }
+    }
+
+    impl Add for TagCounter {
+        type Output = Self;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            let mut counter = self.0;
+            for (tag, count) in rhs.0 {
+                *counter.entry(tag).or_insert(0) += count;
+            }
+            TagCounter(counter)
+        }
+    }
+
+    impl Sub for TagCounter {
+        type Output = Self;
+
+        fn sub(self, rhs: Self) -> Self::Output {
+            let mut counter = self.0;
+            for (tag, count) in rhs.0 {
+                *counter.entry(tag).or_insert(count) -= count;
+            }
+            TagCounter(counter)
         }
     }
 
     struct GroupCache {
         pub members: Vec<CachedMember>,
-        pub tagcounts: HashMap<Tag, usize>,
+        pub tagcounts: TagCounter,
         pub penalty_score: f64,
     }
 
@@ -118,16 +184,23 @@ pub mod cache {
         pub fn create(group: &Group, penalty: &RelationPenalty) -> GroupCache {
             let tagcounts = group.members
                 .iter()
-                .flat_map(|member| member.tags.iter().cloned())
-                .counts();
+                .flat_map(|member| member.tags.iter().cloned()).collect::<Vec<Tag>>().into();
             let penalty_score = group.calc_score(penalty);
             let members = group.members.iter().enumerate().map(|(idx, _)| {
                 CachedMember::create(group, idx, penalty)
             }).collect();
             GroupCache { members, tagcounts, penalty_score }
         }
-        pub fn simulate(&self, action: &Action, condition: &Condition) -> ActionResult {
-            unimplemented!()
+        pub fn simulate(
+            &self,
+            added_members: Vec<Member>,
+            removed_indices: Vec<Index>,
+            condition: &Condition
+        ) -> ActionResult {
+            let added_ids = added_members.iter().map(|member| member.id).collect();
+            // let removed_members = removed_indices.iter().map(|idx| &self.members[*idx].member).collect();
+            let removed_ids = removed_members.iter().map(|member| member.id).collect();
+            unimplemented!("# TODO: check constraint, calc score diff")
         }
     }
 
