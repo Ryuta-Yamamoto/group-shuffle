@@ -32,6 +32,7 @@ struct State {
 
 pub mod action {
     use std::ops::Add;
+    use thiserror::Error;
     use crate::model::{entity::Member, condition::Score};
 
     pub type Index = usize;
@@ -50,14 +51,15 @@ pub mod action {
 
     pub enum Action {
         Swap(Position, Position),
+        Move { from: Position, to: Position },
         Add{ member: Member, group_index: Index },
         Remove(Position),
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Error)]
     pub enum ActionError {
+        #[error("Invalid position")]
         InvalidPosition,
-        InvalidGroupAction,
     }
 
     pub enum ActionResult {
@@ -89,6 +91,7 @@ pub mod action {
 pub mod cache {
     use std::collections::{HashMap, HashSet};
     use std::ops::{Add, Sub};
+    use std::path::PrefixComponent;
     use std::{vec, mem};
 
     use itertools::Itertools;
@@ -96,7 +99,7 @@ pub mod cache {
     use crate::model::entity::{Id, Tag, Member};
     use crate::model::group::{Group, Table};
     use crate::model::condition::{RelationPenalty, Constraint, Condition, Score, self};
-    use super::action::{Index, Action, ActionResult, ActionError};
+    use super::action::{Index, Action, ActionResult, ActionError, Position};
 
     struct CachedMember {
         pub member: Member,
@@ -105,7 +108,7 @@ pub mod cache {
     }
 
     impl CachedMember {
-        pub fn create(group: &Group, index: usize, penalty: &RelationPenalty) -> CachedMember {
+        fn create(group: &Group, index: usize, penalty: &RelationPenalty) -> CachedMember {
             let member = group.members[index].clone();
             let penalty: HashMap<Id, Score> = group.members.iter()
                 .filter(|m| m.id != member.id)
@@ -114,22 +117,26 @@ pub mod cache {
             let score = penalty.values().sum();
             CachedMember { member, penalty, score }
         }
-        pub fn calc_score(&self, ids: &[Id], penalty: &RelationPenalty) -> Score {
+        fn from_ids(member: Member, ids: &[Id], penalty: &RelationPenalty) -> CachedMember {
+            let penalty: HashMap<Id, Score> = ids.iter()
+                .map(|id| (*id, penalty.get_pair([member.id, *id])))
+                .collect();
+            let score = penalty.values().sum();
+            CachedMember { member, penalty, score }
+        }
+        fn calc_score(&self, ids: &[Id], penalty: &RelationPenalty) -> Score {
             ids.iter().map(|id| penalty.get_pair([self.member.id, *id])).sum()
         }
-        pub fn simulate(&self, added_ids: Vec<Id>, removed_ids: Vec<Id>, penalty: &RelationPenalty) -> ActionResult {
-            let my_id = self.member.id;
-            let sub = removed_ids.iter()
-                .filter(|id| **id != my_id)
-                .map(|id| self.penalty.get(id))
-                .try_fold(0., |acc, score| score.map(|score| acc + score));
-            if let Some(sub) = sub {
-                let add = added_ids.iter()
-                    .filter(|id| **id != my_id)
-                    .map(|id| penalty.get_pair([my_id, *id])).sum::<Score>();
-                return ActionResult::ScoreDiff(add - sub)
-            }
-            ActionResult::Failed(vec![ActionError::InvalidPosition])
+        fn snoop_add(&mut self, id: Id, penalty: &RelationPenalty) -> Score {
+            let score = penalty.get_pair([self.member.id, id]);
+            self.penalty.insert(id, score);
+            self.score += score;
+            score
+        }
+        fn snoop_remove(&mut self, id: Id) -> Score {
+            let score = self.penalty.remove(&id).unwrap_or(0 as Score);
+            self.score -= score;
+            score
         }
     }
 
@@ -183,7 +190,7 @@ pub mod cache {
     }
 
     impl GroupCache {
-        pub fn create(group: &Group, penalty: &RelationPenalty) -> GroupCache {
+        fn create(group: &Group, penalty: &RelationPenalty) -> GroupCache {
             let tagcounts = group.members
                 .iter()
                 .flat_map(|member| member.tags.iter().cloned()).collect::<Vec<Tag>>().into();
@@ -198,7 +205,7 @@ pub mod cache {
             self.members.iter().map(|member| member.member.id).collect()
         }
 
-        pub fn simulate_add(&self, member: &Member, condition: &Condition) -> ActionResult {
+        fn simulate_add(&self, member: &Member, condition: &Condition) -> ActionResult {
             let score = self.get_ids().iter()
                 .map(|id| condition.penalty.get_pair([member.id, *id]))
                 .sum();
@@ -210,7 +217,7 @@ pub mod cache {
             }
         }
 
-        pub fn simulate_remove(&self, index: Index, condition: &Condition) -> ActionResult {
+        fn simulate_remove(&self, index: Index, condition: &Condition) -> ActionResult {
             if let Option::Some(member) = &self.members.get(index) {
                 let tagcounts = self.tagcounts.clone() - member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
                 if condition.constraint.check(&tagcounts, self.members.len() - 1) {
@@ -223,7 +230,7 @@ pub mod cache {
             }
         }
 
-        pub fn simulate_swap(&self, index: Index, member: &Member, condition: &Condition) -> ActionResult {
+        fn simulate_swap(&self, index: Index, member: &Member, condition: &Condition) -> ActionResult {
             if let Option::Some(removed_member) = &self.members.get(index) {
                 let score = self.get_ids().iter()
                     .map(|id| condition.penalty.get_pair([member.id, *id]))
@@ -242,6 +249,42 @@ pub mod cache {
             }
         }
 
+        fn add(&mut self, member: Member, condition: &Condition) -> Result<(), ActionError> {
+            self.members.iter_mut().for_each(|m| { m.snoop_add(m.member.id, &condition.penalty); });
+            self.tagcounts = self.tagcounts.clone() + member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+            let cache = CachedMember::from_ids(member, &self.get_ids().into_iter().collect_vec(), &condition.penalty);
+            self.members.push(cache);
+            Ok(())
+        }
+
+        fn remove(&mut self, index: Index) -> Result<Member, ActionError> {
+            if self.members.len() <= index {
+                return Err(ActionError::InvalidPosition);
+            }
+            let member = self.members.remove(index);
+            self.members.iter_mut().for_each(|m| { m.snoop_remove(member.member.id); });
+            self.tagcounts = self.tagcounts.clone() - member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+            self.members.remove(index);
+            Ok(member.member)
+        }
+
+        fn swap(&mut self, index: Index, member: Member, condition: &Condition) -> Result<Member, ActionError> {
+            if self.members.len() <= index {
+                return Err(ActionError::InvalidPosition);
+            }
+            let removed_member = self.members.remove(index);
+            self.members.iter_mut()
+                .for_each(|m| {
+                    m.snoop_remove(removed_member.member.id);
+                    m.snoop_add(member.id, &condition.penalty);
+                });
+            self.tagcounts = self.tagcounts.clone()
+                + member.tags.iter().cloned().collect::<Vec<Tag>>().into()
+                - removed_member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+            let cache = CachedMember::from_ids(member, &self.get_ids().into_iter().collect_vec(), &condition.penalty);
+            self.members.insert(index, cache);
+            Ok(removed_member.member)
+        }
 
     }
 
@@ -260,8 +303,96 @@ pub mod cache {
             }).sum();
             TableCache { groups, penalty_score }
         }
+
+        fn get_member(&self, position: &Position) -> Option<&CachedMember> {
+            self.groups.get(position.group_index)?.members.get(position.member_index)
+        }
+
+        fn get_group(&self, position: &Position) -> Option<&GroupCache> {
+            self.groups.get(position.group_index)
+        }
+
+        fn get_mut_group(&mut self, position: &Position) -> Option<&mut GroupCache> {
+            self.groups.get_mut(position.group_index)
+        }
+
         fn simulate(&self, action: &Action, condition: &Condition) -> ActionResult {
-            unimplemented!()
+            match action {
+                Action::Add { group_index, member } => {
+                    if let Option::Some(group) = self.groups.get(*group_index) {
+                        group.simulate_add(member, condition)
+                    } else {
+                        ActionResult::Failed(vec![ActionError::InvalidPosition])
+                    }
+                }
+                Action::Remove(position) => {
+                    if let Option::Some(group) = self.groups.get(position.group_index) {
+                        group.simulate_remove(position.member_index, condition)
+                    } else {
+                        ActionResult::Failed(vec![ActionError::InvalidPosition])
+                    }
+                }
+                Action::Swap(position1, position2) => {
+                    if let (Some(member1), Some(member2)) = (self.get_member(position1), self.get_member(position2)) {
+                        self.get_group(position1).unwrap().simulate_swap(position1.member_index, &member2.member, condition)
+                            + self.get_group(position2).unwrap().simulate_swap(position2.member_index, &member1.member, condition)
+                    } else {
+                        ActionResult::Failed(vec![ActionError::InvalidPosition])
+                    }
+                }
+                Action::Move { from, to } => {
+                    if let (Some(member), Some(group)) = (self.get_member(from), self.get_group(from)) {
+                        group.simulate_remove(from.member_index, condition)
+                            + self.groups.get(to.group_index).unwrap().simulate_add(&member.member, condition)
+                    } else {
+                        ActionResult::Failed(vec![ActionError::InvalidPosition])
+                    }
+                }
+            }
+        }
+
+        fn act(&mut self, action: Action, condition: &Condition) -> Result<Option<Member>, ActionError> {
+            match action {
+                Action::Add { group_index, member } => {
+                    let group = self.groups.get_mut(group_index).ok_or(ActionError::InvalidPosition)?;
+                    let prev_score = group.penalty_score;
+                    group.add(member, condition)?;
+                    self.penalty_score += group.penalty_score - prev_score;
+                    Ok(None)
+                }
+                Action::Remove(position) => {
+                    let group = self.groups.get_mut(position.group_index).ok_or(ActionError::InvalidPosition)?;
+                    let prev_score = group.penalty_score;
+                    let member = group.remove(position.member_index)?;
+                    self.penalty_score -= group.penalty_score - prev_score;
+                    Ok(Some(member))
+                }
+                Action::Swap(position1, position2) => {
+                    let member2_clone = self.get_member(&position2).ok_or(ActionError::InvalidPosition)?.member.clone();
+                    let group1 = self.groups.get_mut(position1.group_index).ok_or(ActionError::InvalidPosition)?;
+                    let mut score_diff = - group1.penalty_score;
+                    let member1 = group1.swap(position1.member_index, member2_clone.clone(), condition)?;
+                    score_diff += group1.penalty_score;
+                    let group2 = self.groups.get_mut(position2.group_index).ok_or(ActionError::InvalidPosition)?;
+                    score_diff -= group2.penalty_score;
+                    group2.swap(position2.member_index, member1, condition)?;
+                    score_diff += group2.penalty_score;
+                    self.penalty_score += score_diff;
+                    Ok(None)
+                }
+                Action::Move { from, to } => {
+                    let group_from = self.groups.get_mut(from.group_index).ok_or(ActionError::InvalidPosition)?;
+                    let mut score_diff = - group_from.penalty_score;
+                    let member = group_from.remove(from.member_index)?;
+                    score_diff += group_from.penalty_score;
+                    let group_to = self.groups.get_mut(to.group_index).ok_or(ActionError::InvalidPosition)?;
+                    score_diff -= group_to.penalty_score;
+                    group_to.add(member, &condition)?;
+                    score_diff += group_to.penalty_score;
+                    self.penalty_score += score_diff;
+                    Ok(None)
+                }
+            }
         }
     }
 }
