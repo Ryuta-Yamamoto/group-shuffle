@@ -7,14 +7,7 @@ use crate::model::group::{Group, Table};
 use crate::model::condition::{RelationPenalty, Constraint, Condition, Score};
 
 
-impl Group {
-    fn calc_score(&self, penalty: &RelationPenalty) -> Score {
-        self.members.iter().combinations(2).map(|pair| {
-            let ids = [pair[0].id, pair[1].id];
-            penalty.get_pair(ids)
-        }).sum()
-    }
-}
+
 
 
 struct Params {
@@ -30,11 +23,8 @@ struct State {
 }
 
 
-pub mod action {
-    use std::ops::Add;
-    use thiserror::Error;
-    use crate::model::{entity::Member, condition::Score};
 
+<<<<<<< Updated upstream
     pub type Index = usize;
     pub struct Position {
         pub group_index: Index,
@@ -396,3 +386,5 @@ pub mod cache {
         }
     }
 }
+=======
+>>>>>>> Stashed changes
