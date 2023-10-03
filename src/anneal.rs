@@ -7,9 +7,6 @@ use crate::model::group::{Group, Table};
 use crate::model::condition::{RelationPenalty, Constraint, Condition, Score};
 
 
-
-
-
 struct Params {
     temperature: f64,
     cooling_rate: f64,

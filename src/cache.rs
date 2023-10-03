@@ -18,35 +18,6 @@ impl Group {
     }
 }
 
-struct CachedMember {
-    pub member: Member,
-    pub score: Score,
-}
-
-impl CachedMember {
-    fn create(group: &Group, index: usize, penalty: &RelationPenalty) -> CachedMember {
-        let member = group.members[index].clone();
-        let score = group.members.iter()
-            .filter(|m| m.id != member.id)
-            .map(|m| penalty.get_pair([member.id, m.id])).sum();
-        CachedMember { member, score }
-    }
-    fn from_ids(member: Member, ids: &[Id], penalty: &RelationPenalty) -> CachedMember {
-        let score = ids.iter()
-            .map(|id| penalty.get_pair([member.id, *id]))
-            .sum();
-        CachedMember { member, score }
-    }
-    fn calc_score(&self, ids: &[Id], penalty: &RelationPenalty) -> Score {
-        ids.iter().map(|id| penalty.get_pair([self.member.id, *id])).sum()
-    }
-    fn broadcast_adding(&self, other_members: &mut [CachedMember], penalty: &RelationPenalty) {
-        other_members.iter_mut().for_each(|m| m.score += penalty.get_pair([self.member.id, m.member.id]));
-    }
-    fn broadcast_removed(&self, other_members: &mut [CachedMember], penalty: &RelationPenalty) {
-        other_members.iter_mut().for_each(|m| m.score -= penalty.get_pair([self.member.id, m.member.id]));
-    }
-}
 
 #[derive(Debug, Clone)]
 struct TagCounter (HashMap<Tag, usize>);
@@ -92,9 +63,9 @@ impl Constraint {
 }
 
 struct GroupCache {
-    pub members: Vec<CachedMember>,
+    pub members: Vec<Member>,
     pub tagcounts: TagCounter,
-    pub penalty_score: f64,
+    pub penalty_score: Score,
 }
 
 impl GroupCache {
@@ -103,14 +74,12 @@ impl GroupCache {
             .iter()
             .flat_map(|member| member.tags.iter().cloned()).collect::<Vec<Tag>>().into();
         let penalty_score = group.calc_score(penalty);
-        let members = group.members.iter().enumerate().map(|(idx, _)| {
-            CachedMember::create(group, idx, penalty)
-        }).collect();
+        let members = group.members.clone();
         GroupCache { members, tagcounts, penalty_score }
     }
 
     fn get_ids(&self) -> HashSet<Id> {
-        self.members.iter().map(|member| member.member.id).collect()
+        self.members.iter().map(|member| member.id).collect()
     }
 
     fn simulate_add(&self, member: &Member, condition: &Condition) -> ActionResult {
@@ -127,11 +96,15 @@ impl GroupCache {
 
     fn simulate_remove(&self, index: Index, condition: &Condition) -> ActionResult {
         if let Option::Some(member) = &self.members.get(index) {
-            let tagcounts = self.tagcounts.clone() - member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+            let tagcounts = self.tagcounts.clone() - member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+            let score = self.get_ids().iter()
+                .filter(|id| **id != member.id)
+                .map(|id| condition.penalty.get_pair([member.id, *id]))
+                .sum::<Score>();
             if condition.constraint.check(&tagcounts, self.members.len() - 1) {
-                ActionResult::ScoreDiff(-member.score)
+                ActionResult::ScoreDiff(-score)
             } else {
-                ActionResult::UnsatisfiedScoreDiff(-member.score)
+                ActionResult::UnsatisfiedScoreDiff(-score)
             }
         } else {
             ActionResult::Failed(vec![ActionError::InvalidPosition])
@@ -141,12 +114,11 @@ impl GroupCache {
     fn simulate_swap(&self, index: Index, member: &Member, condition: &Condition) -> ActionResult {
         if let Option::Some(removed_member) = &self.members.get(index) {
             let score = self.get_ids().iter()
-                .map(|id| condition.penalty.get_pair([member.id, *id]))
-                .sum::<Score>()
-                - removed_member.score;
+                .map(|id| condition.penalty.get_pair([member.id, *id]) - condition.penalty.get_pair([removed_member.id, *id]))
+                .sum::<Score>();
             let tagcounts = self.tagcounts.clone()
                 + member.tags.iter().cloned().collect::<Vec<Tag>>().into()
-                - removed_member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+                - removed_member.tags.iter().cloned().collect::<Vec<Tag>>().into();
             if condition.constraint.check(&tagcounts, self.members.len()) {
                 ActionResult::ScoreDiff(score)
             } else {
@@ -159,9 +131,10 @@ impl GroupCache {
 
     fn add(&mut self, member: Member, condition: &Condition) -> Result<(), ActionError> {
         self.tagcounts = self.tagcounts.clone() + member.tags.iter().cloned().collect::<Vec<Tag>>().into();
-        let cache = CachedMember::from_ids(member, &self.get_ids().into_iter().collect_vec(), &condition.penalty);
-        cache.broadcast_adding(&mut self.members, &condition.penalty);
-        self.members.push(cache);
+        self.penalty_score += self.get_ids().iter()
+            .map(|id| condition.penalty.get_pair([member.id, *id]))
+            .sum::<Score>();
+        self.members.push(member);
         Ok(())
     }
 
@@ -170,9 +143,11 @@ impl GroupCache {
             return Err(ActionError::InvalidPosition);
         }
         let member = self.members.remove(index);
-        member.broadcast_removed(&mut self.members, &condition.penalty);
-        self.tagcounts = self.tagcounts.clone() - member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
-        Ok(member.member)
+        self.tagcounts = self.tagcounts.clone() - member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+        self.penalty_score -= self.get_ids().iter()
+            .map(|id| condition.penalty.get_pair([member.id, *id]))
+            .sum::<Score>();
+        Ok(member)
     }
 
     fn swap(&mut self, index: Index, member: Member, condition: &Condition) -> Result<Member, ActionError> {
@@ -180,21 +155,21 @@ impl GroupCache {
             return Err(ActionError::InvalidPosition);
         }
         let removed_member = self.members.remove(index);
-        removed_member.broadcast_removed(&mut self.members, &condition.penalty);
         self.tagcounts = self.tagcounts.clone()
             + member.tags.iter().cloned().collect::<Vec<Tag>>().into()
-            - removed_member.member.tags.iter().cloned().collect::<Vec<Tag>>().into();
-        let cache = CachedMember::from_ids(member, &self.get_ids().into_iter().collect_vec(), &condition.penalty);
-        cache.broadcast_adding(&mut self.members, &condition.penalty);
-        self.members.insert(index, cache);
-        Ok(removed_member.member)
+            - removed_member.tags.iter().cloned().collect::<Vec<Tag>>().into();
+        self.penalty_score += self.get_ids().iter()
+            .map(|id| condition.penalty.get_pair([member.id, *id]) - condition.penalty.get_pair([removed_member.id, *id]))
+            .sum::<Score>();
+        self.members.insert(index, member);
+        Ok(removed_member)
     }
 
 }
 
 struct TableCache {
     pub groups: Vec<GroupCache>,
-    pub penalty_score: f64,
+    pub penalty_score: Score,
 }
 
 impl TableCache {
@@ -208,7 +183,7 @@ impl TableCache {
         TableCache { groups, penalty_score }
     }
 
-    fn get_member(&self, position: &Position) -> Option<&CachedMember> {
+    fn get_member(&self, position: &Position) -> Option<&Member> {
         self.groups.get(position.group_index)?.members.get(position.member_index)
     }
 
@@ -238,8 +213,8 @@ impl TableCache {
             }
             Action::Swap(position1, position2) => {
                 if let (Some(member1), Some(member2)) = (self.get_member(position1), self.get_member(position2)) {
-                    self.get_group(position1).unwrap().simulate_swap(position1.member_index, &member2.member, condition)
-                        + self.get_group(position2).unwrap().simulate_swap(position2.member_index, &member1.member, condition)
+                    self.get_group(position1).unwrap().simulate_swap(position1.member_index, &member2, condition)
+                        + self.get_group(position2).unwrap().simulate_swap(position2.member_index, &member1, condition)
                 } else {
                     ActionResult::Failed(vec![ActionError::InvalidPosition])
                 }
@@ -247,7 +222,7 @@ impl TableCache {
             Action::Move { from, to } => {
                 if let (Some(member), Some(group)) = (self.get_member(from), self.get_group(from)) {
                     group.simulate_remove(from.member_index, condition)
-                        + self.groups.get(to.group_index).unwrap().simulate_add(&member.member, condition)
+                        + self.groups.get(to.group_index).unwrap().simulate_add(&member, condition)
                 } else {
                     ActionResult::Failed(vec![ActionError::InvalidPosition])
                 }
@@ -272,7 +247,7 @@ impl TableCache {
                 Ok(Some(member))
             }
             Action::Swap(position1, position2) => {
-                let member2_clone = self.get_member(&position2).ok_or(ActionError::InvalidPosition)?.member.clone();
+                let member2_clone = self.get_member(&position2).ok_or(ActionError::InvalidPosition)?.clone();
                 let group1 = self.groups.get_mut(position1.group_index).ok_or(ActionError::InvalidPosition)?;
                 let mut score_diff = - group1.penalty_score;
                 let member1 = group1.swap(position1.member_index, member2_clone.clone(), condition)?;
