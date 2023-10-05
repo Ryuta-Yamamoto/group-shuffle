@@ -5,7 +5,7 @@ use itertools::Itertools;
 
 use crate::model::entity::{Id, Tag, Member};
 use crate::model::group::{Group, Table};
-use crate::model::condition::{RelationPenalty, Constraint, Condition, Score, self};
+use crate::model::condition::{RelationPenalty, Constraint, Condition, Score, Range};
 use crate::action::{Index, Action, ActionResult, ActionError, Position};
 
 
@@ -57,8 +57,31 @@ impl Sub for TagCounter {
 }
 
 impl Constraint {
-    fn check(&self, tagcounts: &TagCounter, n_members: usize) -> bool {
-        unimplemented!()
+    fn check(&self, tagcounts: &TagCounter, n_members: usize) -> Result<(), HashSet<String>> {
+        let error_tags: HashSet<String> = self.0.iter().map(|(tag, range)| {
+            let count = tagcounts.0.get(tag).copied().unwrap_or(0);
+            match range {
+                Range::Ratio {min, max} => {
+                    if (count as f64) < *min * n_members as f64 || (count as f64) > *max * n_members as f64 {
+                        Option::Some(tag.clone())
+                    } else {
+                        Option::None
+                    }
+                },
+                Range::Count {min, max} => {
+                    if count < *min || count > *max {
+                        Option::Some(tag.clone())
+                    } else {
+                        Option::None
+                    }
+                },
+            }
+        }).filter_map(|x| x).collect();
+        if error_tags.is_empty() {
+            Ok(())
+        } else {
+            Err(error_tags)
+        }
     }
 }
 
@@ -87,7 +110,7 @@ impl GroupCache {
             .map(|id| condition.penalty.get_pair([member.id, *id]))
             .sum();
         let tagcounts = self.tagcounts.clone() + member.tags.iter().cloned().collect::<Vec<Tag>>().into();
-        if condition.constraint.check(&tagcounts, self.members.len() + 1) {
+        if condition.constraint.check(&tagcounts, self.members.len() + 1).is_ok() {
             ActionResult::ScoreDiff(score)
         } else {
             ActionResult::UnsatisfiedScoreDiff(score)
@@ -101,7 +124,7 @@ impl GroupCache {
                 .filter(|id| **id != member.id)
                 .map(|id| condition.penalty.get_pair([member.id, *id]))
                 .sum::<Score>();
-            if condition.constraint.check(&tagcounts, self.members.len() - 1) {
+            if condition.constraint.check(&tagcounts, self.members.len() - 1).is_ok() {
                 ActionResult::ScoreDiff(-score)
             } else {
                 ActionResult::UnsatisfiedScoreDiff(-score)
@@ -119,7 +142,7 @@ impl GroupCache {
             let tagcounts = self.tagcounts.clone()
                 + member.tags.iter().cloned().collect::<Vec<Tag>>().into()
                 - removed_member.tags.iter().cloned().collect::<Vec<Tag>>().into();
-            if condition.constraint.check(&tagcounts, self.members.len()) {
+            if condition.constraint.check(&tagcounts, self.members.len()).is_ok() {
                 ActionResult::ScoreDiff(score)
             } else {
                 ActionResult::UnsatisfiedScoreDiff(score)
@@ -272,5 +295,61 @@ impl TableCache {
                 Ok(None)
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use super::*;
+    use crate::model::condition::Range;
+
+    fn table() -> Table {
+        let groups = vec![
+            Group {
+                members: vec![
+                    Member { id: 0, tags: ["a".to_string()].into() },
+                    Member { id: 1, tags: ["b".to_string()].into() },
+                    Member { id: 2, tags: ["c".to_string()].into() },
+                ],
+            },
+            Group {
+                members: vec![
+                    Member { id: 3, tags: ["a".to_string(), "b".to_string()].into() },
+                    Member { id: 4, tags: ["a".to_string(), "c".to_string()].into() },
+                    Member { id: 5, tags: ["b".to_string(), "c".to_string()].into() },
+                ],
+            }
+        ];
+        Table { groups }
+    }
+
+    fn condition() -> Condition {
+        Condition {
+            penalty: RelationPenalty {
+                scores: [
+                    ([0, 1].into_iter().collect::<BTreeSet<Id>>(), 1 as Score),
+                    ([1, 2].into_iter().collect::<BTreeSet<Id>>(), 2 as Score),
+                    ([2, 3].into_iter().collect::<BTreeSet<Id>>(), 3 as Score),
+                    ([3, 4].into_iter().collect::<BTreeSet<Id>>(), 4 as Score),
+                    ([4, 5].into_iter().collect::<BTreeSet<Id>>(), 5 as Score),
+                    ([5, 6].into_iter().collect::<BTreeSet<Id>>(), 6 as Score),
+                ].into_iter().collect(),
+                default: 0 as Score,
+            },
+            constraint: Constraint (
+                [
+                    ("a".to_string(), Range::Count { min: 1, max: 2}),
+                    ("b".to_string(), Range::Count { min: 1, max: 2}),
+                    ("c".to_string(), Range::Count { min: 1, max: 2}),
+                ].into()
+            )
+        }
+    }
+
+    #[test]
+    fn test_simulate_add() {
+        unimplemented!()
     }
 }

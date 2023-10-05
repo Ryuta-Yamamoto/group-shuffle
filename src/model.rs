@@ -31,7 +31,7 @@ pub mod condition {
 
     pub struct RelationPenalty {
         pub scores: HashMap<BTreeSet<Id>, Score>,
-        default: f64,
+        pub default: f64,
     }
 
     impl RelationPenalty {
