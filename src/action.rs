@@ -3,19 +3,21 @@ use thiserror::Error;
 use crate::model::{entity::Member, condition::Score};
 
 pub type Index = usize;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Position {
     pub group_index: Index,
     pub member_index: Index,
 }
 
-
+#[derive(Debug, Clone)]
 pub enum GroupAction {
     Add(Member),
     Remove(Index),
     Replace(Index, Member),
 }
 
-
+#[derive(Debug, Clone)]
 pub enum Action {
     Swap(Position, Position),
     Move { from: Position, to: Position },
@@ -23,12 +25,13 @@ pub enum Action {
     Remove(Position),
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, PartialEq)]
 pub enum ActionError {
     #[error("Invalid position")]
     InvalidPosition,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum ActionResult {
     ScoreDiff(Score),
     UnsatisfiedScoreDiff(Score),   // score, unsatisfied constraint

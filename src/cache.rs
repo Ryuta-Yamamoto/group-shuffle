@@ -305,7 +305,7 @@ mod tests {
     use super::*;
     use crate::model::condition::Range;
 
-    fn table() -> Table {
+    fn table_fixture() -> Table {
         let groups = vec![
             Group {
                 members: vec![
@@ -325,7 +325,7 @@ mod tests {
         Table { groups }
     }
 
-    fn condition() -> Condition {
+    fn condition_fixture() -> Condition {
         Condition {
             penalty: RelationPenalty {
                 scores: [
@@ -348,8 +348,37 @@ mod tests {
         }
     }
 
+    fn tablecache_fixture() -> TableCache {
+        TableCache::create(&table_fixture(), &condition_fixture().penalty)
+    }
+
+    #[test]
+    fn test_create_table() {
+        let table = TableCache::create(&table_fixture(), &condition_fixture().penalty);
+        assert_eq!(table.groups.len(), 2);
+        assert_eq!(table.penalty_score, 12 as Score);
+        assert_eq!(table.groups[0].members.len(), 3);
+        assert_eq!(table.groups[1].members.len(), 3);
+        assert_eq!(table.groups[0].penalty_score, 3 as Score);
+        assert_eq!(table.groups[1].penalty_score, 9 as Score);
+    }
+
     #[test]
     fn test_simulate_add() {
-        unimplemented!()
+        let table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let idx_tags_result = [
+            (0, Vec::new(), ActionResult::ScoreDiff(0 as Score)),
+            (1, Vec::new(), ActionResult::ScoreDiff(6 as Score)),
+            (0, vec!["a".to_string()], ActionResult::ScoreDiff(0 as Score)),
+            (1, vec!["a".to_string()], ActionResult::UnsatisfiedScoreDiff(6 as Score)),
+            (2, vec!["a".to_string()], ActionResult::Failed(vec![ActionError::InvalidPosition])),
+        ];
+
+        for (group_index, tags, result) in idx_tags_result {
+            let member = Member { id: 6, tags: tags.into_iter().collect() };
+            let action = Action::Add { group_index: group_index, member };
+            assert_eq!(table.simulate(&action, &condition), result);
+        };
     }
 }
