@@ -137,6 +137,7 @@ impl GroupCache {
     fn simulate_swap(&self, index: Index, member: &Member, condition: &Condition) -> ActionResult {
         if let Option::Some(removed_member) = &self.members.get(index) {
             let score = self.get_ids().iter()
+                .filter(|id| **id != removed_member.id)
                 .map(|id| condition.penalty.get_pair([member.id, *id]) - condition.penalty.get_pair([removed_member.id, *id]))
                 .sum::<Score>();
             let tagcounts = self.tagcounts.clone()
@@ -378,6 +379,69 @@ mod tests {
         for (group_index, tags, result) in idx_tags_result {
             let member = Member { id: 6, tags: tags.into_iter().collect() };
             let action = Action::Add { group_index: group_index, member };
+            assert_eq!(table.simulate(&action, &condition), result);
+        };
+    }
+
+    #[test]
+    fn test_simulate_remove() {
+        let table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let idx_tags_result = [
+            (0, 0, ActionResult::UnsatisfiedScoreDiff(-1 as Score)),
+            (0, 1, ActionResult::UnsatisfiedScoreDiff(-3 as Score)),
+            (0, 2, ActionResult::UnsatisfiedScoreDiff(-2 as Score)),
+            (1, 0, ActionResult::ScoreDiff(-4 as Score)),
+            (1, 1, ActionResult::ScoreDiff(-9 as Score)),
+            (1, 2, ActionResult::ScoreDiff(-5 as Score)),
+            (0, 3, ActionResult::Failed(vec![ActionError::InvalidPosition])),
+            (1, 3, ActionResult::Failed(vec![ActionError::InvalidPosition])),
+        ];
+
+        for (group_index, member_index, result) in idx_tags_result {
+            let position = Position { group_index, member_index };
+            let action = Action::Remove(position);
+            assert_eq!(table.simulate(&action, &condition), result);
+        };
+    }
+
+    #[test]
+    fn test_simulate_swap() {
+        let table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let idx_tags_result = [
+            (0, 0, 1, 0, ActionResult::ScoreDiff(-2 as Score)),
+            (0, 0, 1, 1, ActionResult::ScoreDiff(-10 as Score)),
+            (0, 0, 1, 2, ActionResult::UnsatisfiedScoreDiff(-6 as Score)),
+            (0, 1, 1, 0, ActionResult::ScoreDiff(-4 as Score)),
+            (0, 1, 1, 1, ActionResult::UnsatisfiedScoreDiff(-12 as Score)),
+            (0, 1, 1, 2, ActionResult::ScoreDiff(-8 as Score)),
+            (0, 2, 1, 0, ActionResult::UnsatisfiedScoreDiff(-6 as Score)),
+            (0, 2, 1, 1, ActionResult::ScoreDiff(-8 as Score)),
+            (0, 2, 1, 2, ActionResult::ScoreDiff(-4 as Score)),
+            (1, 0, 0, 0, ActionResult::ScoreDiff(-2 as Score)),
+            (1, 1, 0, 0, ActionResult::ScoreDiff(-10 as Score)),
+            (1, 2, 0, 0, ActionResult::UnsatisfiedScoreDiff(-6 as Score)),
+            (1, 0, 0, 1, ActionResult::ScoreDiff(-4 as Score)),
+            (1, 1, 0, 1, ActionResult::UnsatisfiedScoreDiff(-12 as Score)),
+            (1, 2, 0, 1, ActionResult::ScoreDiff(-8 as Score)),
+            (1, 0, 0, 2, ActionResult::UnsatisfiedScoreDiff(-6 as Score)),
+            (1, 1, 0, 2, ActionResult::ScoreDiff(-8 as Score)),
+            (1, 2, 0, 2, ActionResult::ScoreDiff(-4 as Score)),
+            (0, 3, 1, 0, ActionResult::Failed(vec![ActionError::InvalidPosition])),
+            (0, 3, 1, 1, ActionResult::Failed(vec![ActionError::InvalidPosition])),
+        ];
+
+        for (
+            group_index,
+            member_index,
+            other_group_index,
+            other_member_index,
+            result
+        ) in idx_tags_result {
+            let position = Position { group_index, member_index };
+            let other_position = Position { group_index: other_group_index, member_index: other_member_index };
+            let action = Action::Swap(position, other_position);
             assert_eq!(table.simulate(&action, &condition), result);
         };
     }
