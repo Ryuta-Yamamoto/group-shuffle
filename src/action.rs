@@ -20,7 +20,7 @@ pub enum GroupAction {
 #[derive(Debug, Clone)]
 pub enum Action {
     Swap(Position, Position),
-    Move { from: Position, to: Position },
+    Move { source_position: Position, target_group: Index },
     Add{ member: Member, group_index: Index },
     Remove(Position),
 }

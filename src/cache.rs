@@ -243,10 +243,10 @@ impl TableCache {
                     ActionResult::Failed(vec![ActionError::InvalidPosition])
                 }
             }
-            Action::Move { from, to } => {
+            Action::Move { source_position: from, target_group: to } => {
                 if let (Some(member), Some(group)) = (self.get_member(from), self.get_group(from)) {
                     group.simulate_remove(from.member_index, condition)
-                        + self.groups.get(to.group_index).unwrap().simulate_add(&member, condition)
+                        + self.groups.get(*to).unwrap().simulate_add(&member, condition)
                 } else {
                     ActionResult::Failed(vec![ActionError::InvalidPosition])
                 }
@@ -283,12 +283,12 @@ impl TableCache {
                 self.penalty_score += score_diff;
                 Ok(None)
             }
-            Action::Move { from, to } => {
+            Action::Move { source_position: from, target_group: to } => {
                 let group_from = self.groups.get_mut(from.group_index).ok_or(ActionError::InvalidPosition)?;
                 let mut score_diff = - group_from.penalty_score;
                 let member = group_from.remove(from.member_index, condition)?;
                 score_diff += group_from.penalty_score;
-                let group_to = self.groups.get_mut(to.group_index).ok_or(ActionError::InvalidPosition)?;
+                let group_to = self.groups.get_mut(to).ok_or(ActionError::InvalidPosition)?;
                 score_diff -= group_to.penalty_score;
                 group_to.add(member, &condition)?;
                 score_diff += group_to.penalty_score;
@@ -442,6 +442,27 @@ mod tests {
             let position = Position { group_index, member_index };
             let other_position = Position { group_index: other_group_index, member_index: other_member_index };
             let action = Action::Swap(position, other_position);
+            assert_eq!(table.simulate(&action, &condition), result);
+        };
+    }
+
+    #[test]
+    fn test_simulate_move() {
+        let table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let idx_tags_result = [
+            (0, 0, 1, ActionResult::UnsatisfiedScoreDiff(-1 as Score)),
+            (0, 1, 1, ActionResult::UnsatisfiedScoreDiff(-3 as Score)),
+            (0, 2, 1, ActionResult::UnsatisfiedScoreDiff(1 as Score)),
+            (1, 0, 0, ActionResult::ScoreDiff(-1 as Score)),
+            (1, 1, 0, ActionResult::ScoreDiff(-9 as Score)),
+            (1, 2, 0, ActionResult::ScoreDiff(-5 as Score)),
+            (0, 3, 1, ActionResult::Failed(vec![ActionError::InvalidPosition])),
+        ];
+
+        for (group_index, member_index, target_group, result) in idx_tags_result {
+            let source_position = Position { group_index, member_index };
+            let action = Action::Move{ source_position, target_group: target_group };
             assert_eq!(table.simulate(&action, &condition), result);
         };
     }
