@@ -85,6 +85,7 @@ impl Constraint {
     }
 }
 
+#[derive(Debug, Clone)]
 struct GroupCache {
     pub members: Vec<Member>,
     pub tagcounts: TagCounter,
@@ -191,6 +192,7 @@ impl GroupCache {
 
 }
 
+#[derive(Debug, Clone)]
 struct TableCache {
     pub groups: Vec<GroupCache>,
     pub penalty_score: Score,
@@ -368,7 +370,7 @@ mod tests {
     fn test_simulate_add() {
         let table = tablecache_fixture();
         let condition = &condition_fixture();
-        let idx_tags_result = [
+        let args = [
             (0, Vec::new(), ActionResult::ScoreDiff(0 as Score)),
             (1, Vec::new(), ActionResult::ScoreDiff(6 as Score)),
             (0, vec!["a".to_string()], ActionResult::ScoreDiff(0 as Score)),
@@ -376,7 +378,7 @@ mod tests {
             (2, vec!["a".to_string()], ActionResult::Failed(vec![ActionError::InvalidPosition])),
         ];
 
-        for (group_index, tags, result) in idx_tags_result {
+        for (group_index, tags, result) in args {
             let member = Member { id: 6, tags: tags.into_iter().collect() };
             let action = Action::Add { group_index: group_index, member };
             assert_eq!(table.simulate(&action, &condition), result);
@@ -387,7 +389,7 @@ mod tests {
     fn test_simulate_remove() {
         let table = tablecache_fixture();
         let condition = &condition_fixture();
-        let idx_tags_result = [
+        let args = [
             (0, 0, ActionResult::UnsatisfiedScoreDiff(-1 as Score)),
             (0, 1, ActionResult::UnsatisfiedScoreDiff(-3 as Score)),
             (0, 2, ActionResult::UnsatisfiedScoreDiff(-2 as Score)),
@@ -398,7 +400,7 @@ mod tests {
             (1, 3, ActionResult::Failed(vec![ActionError::InvalidPosition])),
         ];
 
-        for (group_index, member_index, result) in idx_tags_result {
+        for (group_index, member_index, result) in args {
             let position = Position { group_index, member_index };
             let action = Action::Remove(position);
             assert_eq!(table.simulate(&action, &condition), result);
@@ -409,7 +411,7 @@ mod tests {
     fn test_simulate_swap() {
         let table = tablecache_fixture();
         let condition = &condition_fixture();
-        let idx_tags_result = [
+        let args = [
             (0, 0, 1, 0, ActionResult::ScoreDiff(-2 as Score)),
             (0, 0, 1, 1, ActionResult::ScoreDiff(-10 as Score)),
             (0, 0, 1, 2, ActionResult::UnsatisfiedScoreDiff(-6 as Score)),
@@ -438,7 +440,7 @@ mod tests {
             other_group_index,
             other_member_index,
             result
-        ) in idx_tags_result {
+        ) in args {
             let position = Position { group_index, member_index };
             let other_position = Position { group_index: other_group_index, member_index: other_member_index };
             let action = Action::Swap(position, other_position);
@@ -450,7 +452,7 @@ mod tests {
     fn test_simulate_move() {
         let table = tablecache_fixture();
         let condition = &condition_fixture();
-        let idx_tags_result = [
+        let args = [
             (0, 0, 1, ActionResult::UnsatisfiedScoreDiff(-1 as Score)),
             (0, 1, 1, ActionResult::UnsatisfiedScoreDiff(-3 as Score)),
             (0, 2, 1, ActionResult::UnsatisfiedScoreDiff(1 as Score)),
@@ -460,7 +462,7 @@ mod tests {
             (0, 3, 1, ActionResult::Failed(vec![ActionError::InvalidPosition])),
         ];
 
-        for (group_index, member_index, target_group, result) in idx_tags_result {
+        for (group_index, member_index, target_group, result) in args {
             let source_position = Position { group_index, member_index };
             let action = Action::Move{ source_position, target_group: target_group };
             assert_eq!(table.simulate(&action, &condition), result);
