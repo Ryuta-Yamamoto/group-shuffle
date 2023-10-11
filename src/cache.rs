@@ -269,7 +269,7 @@ impl TableCache {
                 let group = self.groups.get_mut(position.group_index).ok_or(ActionError::InvalidPosition)?;
                 let prev_score = group.penalty_score;
                 let member = group.remove(position.member_index, condition)?;
-                self.penalty_score -= group.penalty_score - prev_score;
+                self.penalty_score += group.penalty_score - prev_score;
                 Ok(Some(member))
             }
             Action::Swap(position1, position2) => {
@@ -467,5 +467,55 @@ mod tests {
             let action = Action::Move{ source_position, target_group: target_group };
             assert_eq!(table.simulate(&action, &condition), result);
         };
+    }
+
+    #[test]
+    fn test_act_add_success() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Add {
+            group_index: 1,
+            member: Member { id: 6, tags: HashSet::new() },
+        };
+        assert_eq!(table.act(action, &condition), Ok(None));
+        assert_eq!(table.groups[0].members.len(), 3);
+        assert_eq!(table.groups[1].members.len(), 4);
+        assert_eq!(table.penalty_score, 18 as Score);
+    }
+
+    #[test]
+    fn test_act_add_failure() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Add {
+            group_index: 2,
+            member: Member { id: 6, tags: HashSet::new() },
+        };
+        assert_eq!(table.act(action, &condition), Err(ActionError::InvalidPosition));
+        assert_eq!(table.groups[0].members.len(), 3);
+        assert_eq!(table.groups[1].members.len(), 3);
+        assert_eq!(table.penalty_score, 12 as Score);
+    }
+
+    #[test]
+    fn test_act_remove_success() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Remove(Position { group_index: 0, member_index: 0 });
+        assert_eq!(table.act(action, &condition), Ok(Some(Member { id: 0, tags: ["a".to_string()].into() })));
+        assert_eq!(table.groups[0].members.len(), 2);
+        assert_eq!(table.groups[1].members.len(), 3);
+        assert_eq!(table.penalty_score, 11 as Score);
+    }
+
+    #[test]
+    fn test_act_remove_failure() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Remove(Position { group_index: 0, member_index: 3 });
+        assert_eq!(table.act(action, &condition), Err(ActionError::InvalidPosition));
+        assert_eq!(table.groups[0].members.len(), 3);
+        assert_eq!(table.groups[1].members.len(), 3);
+        assert_eq!(table.penalty_score, 12 as Score);
     }
 }

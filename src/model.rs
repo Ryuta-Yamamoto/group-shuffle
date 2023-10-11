@@ -4,7 +4,7 @@ pub mod entity {
     pub type Id = u32;
     pub type Tag = String;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq)]
     pub struct Member {
         pub id: Id,
         pub tags: HashSet<Tag>,
