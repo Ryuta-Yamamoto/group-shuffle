@@ -273,6 +273,8 @@ impl TableCache {
                 Ok(Some(member))
             }
             Action::Swap(position1, position2) => {
+                // check position1 is valid
+                self.get_member(&position1).ok_or(ActionError::InvalidPosition)?;
                 let member2_clone = self.get_member(&position2).ok_or(ActionError::InvalidPosition)?.clone();
                 let group1 = self.groups.get_mut(position1.group_index).ok_or(ActionError::InvalidPosition)?;
                 let mut score_diff = - group1.penalty_score;
@@ -286,6 +288,8 @@ impl TableCache {
                 Ok(None)
             }
             Action::Move { source_position: from, target_group: to } => {
+                // check the target group exists
+                self.groups.get(to).ok_or(ActionError::InvalidPosition)?;
                 let group_from = self.groups.get_mut(from.group_index).ok_or(ActionError::InvalidPosition)?;
                 let mut score_diff = - group_from.penalty_score;
                 let member = group_from.remove(from.member_index, condition)?;
@@ -513,6 +517,63 @@ mod tests {
         let mut table = tablecache_fixture();
         let condition = &condition_fixture();
         let action = Action::Remove(Position { group_index: 0, member_index: 3 });
+        assert_eq!(table.act(action, &condition), Err(ActionError::InvalidPosition));
+        assert_eq!(table.groups[0].members.len(), 3);
+        assert_eq!(table.groups[1].members.len(), 3);
+        assert_eq!(table.penalty_score, 12 as Score);
+    }
+
+    #[test]
+    fn test_act_swap_success() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Swap(
+            Position { group_index: 0, member_index: 0 },
+            Position { group_index: 1, member_index: 0 },
+        );
+        assert_eq!(table.act(action, &condition), Ok(None));
+        assert_eq!(table.groups[0].members[0], Member { id: 3, tags: ["a".to_string(), "b".to_string()].into() });
+        assert_eq!(table.groups[1].members[0], Member { id: 0, tags: ["a".to_string()].into() });
+        assert_eq!(table.penalty_score, 10 as Score);
+    }
+
+    #[test]
+    fn test_act_swap_failure() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Swap(
+            Position { group_index: 0, member_index: 0 },
+            Position { group_index: 0, member_index: 3 },
+        );
+        assert_eq!(table.act(action, &condition), Err(ActionError::InvalidPosition));
+        assert_eq!(table.groups[0].members[0], Member { id: 0, tags: ["a".to_string()].into() });
+        assert_eq!(table.groups[1].members[0], Member { id: 3, tags: ["a".to_string(), "b".to_string()].into() });
+        assert_eq!(table.penalty_score, 12 as Score);
+    }
+
+    #[test]
+    fn test_act_move_success() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Move {
+            source_position: Position { group_index: 0, member_index: 0 },
+            target_group: 1,
+        };
+        assert_eq!(table.act(action, &condition), Ok(None));
+        assert_eq!(table.groups[0].members.len(), 2);
+        assert_eq!(table.groups[1].members.len(), 4);
+        assert_eq!(table.groups[1].members[3], Member { id: 0, tags: ["a".to_string()].into() });
+        assert_eq!(table.penalty_score, 11 as Score);
+    }
+
+    #[test]
+    fn test_act_move_failure() {
+        let mut table = tablecache_fixture();
+        let condition = &condition_fixture();
+        let action = Action::Move {
+            source_position: Position { group_index: 0, member_index: 0 },
+            target_group: 2,
+        };
         assert_eq!(table.act(action, &condition), Err(ActionError::InvalidPosition));
         assert_eq!(table.groups[0].members.len(), 3);
         assert_eq!(table.groups[1].members.len(), 3);
