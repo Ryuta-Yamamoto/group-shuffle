@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 itertools = "0.11.0"
 thiserror = "1.0.49"
+rand = { version = "0.8.5", features = ["small_rng"] }

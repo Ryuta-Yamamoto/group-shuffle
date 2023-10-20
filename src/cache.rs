@@ -190,11 +190,15 @@ impl GroupCache {
         Ok(removed_member)
     }
 
+    fn to_group(&self) -> Group {
+        Group { members: self.members.clone() }
+    }
+
 }
 
 #[derive(Debug, Clone)]
-struct TableCache {
-    pub groups: Vec<GroupCache>,
+pub struct TableCache {
+    groups: Vec<GroupCache>,
     pub penalty_score: Score,
 }
 
@@ -302,6 +306,9 @@ impl TableCache {
                 Ok(None)
             }
         }
+    }
+    pub fn to_table(&self) -> Table {
+        Table { groups: self.groups.iter().map(|group| group.to_group()).collect() }
     }
 }
 
